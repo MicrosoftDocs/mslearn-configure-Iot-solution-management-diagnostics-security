@@ -1,0 +1,104 @@
+#!/bin/bash
+
+# Change these values!
+YourID="{your-id}"
+Location="{your-location}"
+
+RGName="rg-az220"
+
+IoTHubName="iot-az220-training-$YourID"
+DPSName="dps-az220-training-$YourID"
+StorageAccountName="staz220training$YourID"
+
+# ensure variables have been set
+if [ $YourID = "{your-id}" ] || [ $Location = "{your-location}" ]
+then
+    echo "You must change the YourID and/or Location values"
+    exit 1
+fi
+
+# Setup colored output
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# functions
+reportStatus() {
+    if [ -z "$1" ]
+    then
+        return
+    fi
+    if [ $1 -eq "0" ]
+    then 
+        printf "${GREEN}Succeeded${NC}\n"
+    else
+        printf "${RED}Failed - ${2}${NC}\n"
+        echo $2 >> build.log
+    fi
+}
+
+# build log file
+rm build.log.old 2> /dev/null
+cp build.log build.log.old 2> /dev/null
+echo "Building Lab Resources" > build.log
+
+# create resource group
+printf "${YELLOW}Create resource group ${RGName} - ${NC}"
+exists=$( az group exists --name rg-az220 -o tsv )
+if [ "${exists}" == "true" ]
+then
+    printf "${GREEN}Already exists\n${NC}"
+else
+    output=$( az group create --name $RGName --location $Location -o json 2>&1 >> build.log)
+    reportStatus $? "$output"
+fi
+
+# create IoT Hub
+printf "${YELLOW}Create IoT Hub $IoTHubName - ${NC}"
+exists=$( az iot hub list --query "[?contains(name, '${IoTHubName}')].name" -o tsv )
+if [ "${exists}" == "${IoTHubName}" ]
+then
+    printf "${GREEN}Already exists\n${NC}"
+else
+    output=$( az iot hub create --name $IoTHubName -g $RGName --sku S1 --location $Location -o json 2>&1 >> build.log)
+    reportStatus $? "$output"
+fi
+
+# create DPS
+printf "${YELLOW}Create DPS $DPSName - ${NC}"
+exists=$( az iot dps list --resource-group $RGName --query "[].name" -o tsv )
+if [ "${exists}" == "${DPSName}" ]
+then
+    printf "${GREEN}Already exists\n${NC}"
+else
+    output=$( az iot dps create --name $DPSName -g $RGName --sku S1 -o json 2>&1 >> build.log)
+    reportStatus $? "$output"
+fi
+
+# Get IoT Hub Connection String so DPS can be linked
+IoTHubConnectionString=$(
+    az iot hub show-connection-string --hub-name $IoTHubName --query connectionString --output tsv
+)
+
+# Link IoT Hub with DPS
+printf "${YELLOW}Create IoT Hub / DPS link - ${NC}"
+exists=$( az iot dps linked-hub list --dps-name $DPSName --resource-group $RGName --query "[].name" -o tsv )
+if [ "${exists}" == "${IoTHubName}.azure-devices.net" ]
+then
+    printf "${GREEN}Already exists\n${NC}"
+else
+    output=$( az iot dps linked-hub create --dps-name $DPSName -g $RGName --connection-string $IoTHubConnectionString --location $Location -o json 2>&1 >> build.log)
+    reportStatus $? "$output"
+fi
+
+# Create a Storage Account
+printf "${YELLOW}Create storage account ${StorageAccountName} - ${NC}"
+exists=$( az storage account list --resource-group ${RGName} --query "[?contains(name, '${StorageAccountName}')].name" -o tsv )
+if [ "${exists}" == "${StorageAccountName}" ]
+then
+    printf "${GREEN}Already exists\n${NC}"
+else
+    output=$( az storage account create --name $StorageAccountName --resource-group $RGName --location $Location --sku Standard_LRS -o table 2>&1 >> build.log )
+    reportStatus $? "$output"
+fi
